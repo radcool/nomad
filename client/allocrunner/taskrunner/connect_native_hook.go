@@ -147,15 +147,15 @@ func (h *connectNativeHook) tlsEnv() map[string]string {
 	m := make(map[string]string)
 
 	if h.consulConfig.CAFile != "" {
-		m["CONSUL_CACERT"] = secretCAFilename
+		m["CONSUL_CACERT"] = filepath.Join("/secrets", secretCAFilename)
 	}
 
 	if h.consulConfig.CertFile != "" {
-		m["CONSUL_CLIENT_CERT"] = secretCertfileFilename
+		m["CONSUL_CLIENT_CERT"] = filepath.Join("/secrets", secretCertfileFilename)
 	}
 
 	if h.consulConfig.KeyFile != "" {
-		m["CONSUL_CLIENT_KEY"] = secretKeyfileFilename
+		m["CONSUL_CLIENT_KEY"] = filepath.Join("/secrets", secretKeyfileFilename)
 	}
 
 	if v := h.consulConfig.Auth; v != "" {
