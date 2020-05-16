@@ -3,6 +3,7 @@ package taskrunner
 import (
 	"context"
 	"io"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 
@@ -83,16 +84,20 @@ func (h *connectNativeHook) Prestart(
 
 	// set environment variables for communicating with Consul agent
 	response.Env = h.tlsEnv()
+	if err := h.maybeSetSITokenEnv(request.Task.Name, response.Env); err != nil {
+		h.logger.Error("failed to load Consul Service Identity Token", "error", err, "task", request.Task.Name)
+		return err
+	}
 
-	// todo request / set SI token
-
+	// tls/acl setup for native task done
+	response.Done = true
 	return nil
 }
 
 const (
-	secretCAFilename       = "_consul_ca.pem"
-	secretCertfileFilename = "_consul_cert.pem"
-	secretKeyfileFilename  = "_consul_key.pem"
+	secretCAFilename       = "consul_ca_file"
+	secretCertfileFilename = "consul_cert_file"
+	secretKeyfileFilename  = "consul_key_file"
 )
 
 func (h *connectNativeHook) copyCertificates(consulConfig consulTransportConfig, dir string) error {
@@ -137,13 +142,19 @@ func (connectNativeHook) copyCertificate(source, dir, name string) error {
 	return nil
 }
 
-// env creates a set of additional of environment variables to be used when launching
+// tlsEnv creates a set of additional of environment variables to be used when launching
 // the connect native task. This will enable the task to communicate with Consul
 // if Consul has transport security turned on.
 //
 // We do NOT set CONSUL_HTTP_TOKEN from the nomad agent's consul config, as that
 // is a separate security concern addressed by the service identity hook.
 func (h *connectNativeHook) tlsEnv() map[string]string {
+
+	// todo: maybeLoadSIToken references req.TaskDir.SecretsDir, can we do the same?
+	//  probably no - this is referenced by the the task, the envoy version only
+	//  needs the file in the context of the envoy bootstrap command, which runs
+	//  on the host
+
 	m := make(map[string]string)
 
 	if h.consulConfig.CAFile != "" {
@@ -169,4 +180,27 @@ func (h *connectNativeHook) tlsEnv() map[string]string {
 	}
 
 	return m
+}
+
+// maybeSetSITokenEnv will set the CONSUL_HTTP_TOKEN environment variable in
+// the given env map, if the token is found to exist in the task's secrets
+// directory.
+//
+// Following the pattern of the envoy_bootstrap_hook, the Consul Service Identity
+// ACL Token is generated prior to this hook, if Consul ACLs are enabled. This is
+// done in the sids_hook, which places the token at secrets/si_token in the task
+// workspace. The content of that file is the SI token specific to this task
+// instance.
+func (h *connectNativeHook) maybeSetSITokenEnv(task string, env map[string]string) error {
+	token, err := ioutil.ReadFile(filepath.Join("/secrets", sidsTokenFile))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return errors.Wrapf(err, "failed to load SI token for native task %s", task)
+		}
+		h.logger.Trace("no SI token to load for native task", "task", task)
+		return nil // token file DNE; acls not enabled
+	}
+	h.logger.Trace("recovered pre-existing SI token for native task", "task", task)
+	env["CONSUL_HTTP_TOKEN"] = string(token)
+	return nil
 }
